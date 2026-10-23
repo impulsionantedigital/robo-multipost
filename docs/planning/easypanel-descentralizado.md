@@ -123,6 +123,7 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
   FRONTEND_URL=https://post.impulsionante.com.br
   NEXT_PUBLIC_BACKEND_URL=https://post.impulsionante.com.br/api
   BACKEND_INTERNAL_URL=http://localhost:3000
+  PORT=3000
   JWT_SECRET=
   ENCRYPTION_KEY=
   DATABASE_URL=postgresql://postgres:<senha>@multipost_postgres:5432/postiz
@@ -145,6 +146,8 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
   API_LIMIT=30
   NX_ADD_PLUGINS=false
   ```
+
+  `PORT=3000` é **obrigatório**: o Easypanel injeta `PORT=80` em serviços App e o backend usa `process.env.PORT` (`apps/backend/src/main.ts`); sem isso ele escuta na 80, o nginx interno procura na 3000 e `/api/` responde 502.
 
 - [ ] **Mounts:** nenhum. As mídias ficam no bucket S3 (bucket policy de leitura pública + CORS liberando `PUT` do domínio — ver `docs/operations/storage-s3.md`). O app não usa `/config`. **Pré-requisito:** a `main` precisa conter o suporte a `STORAGE_S3_ENDPOINT` (branch `feat/s3-compatible-storage`); sem ele, os uploads falham.
 - [ ] **Domains:** `post.impulsionante.com.br`, HTTPS, porta **5000**. (Antes, remover o domínio do serviço Compose antigo.)

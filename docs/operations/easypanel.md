@@ -59,6 +59,7 @@ Altere `APP_VERSION` e faça deploy. Os dados ficam nos volumes.
 | "Service is not reachable" | Domínio adicionado depois do deploy | Faça deploy de novo |
 | Erro em `reconcileRefreshTokensCron` no log do app | App subiu antes do Temporal aceitar conexões | Reinicie o container `postiz` |
 | `/api/` responde 502 e o log do backend mostra `cannot have more than 3 search attribute of type Text` | Temporal rodando **sem Elasticsearch** (`ENABLE_ES=false`, ex.: [instalação descentralizada](../planning/easypanel-descentralizado.md)): a imagem `auto-setup` cria atributos de teste do tipo Text e a visibility SQL aceita só 3 | No Temporal: `SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true` e remover `CustomStringField`/`CustomTextField` com `temporal operator search-attribute remove --address <projeto>_temporal:7233 --namespace default --name <campo> --yes`; depois `pm2 restart backend` no app |
+| `/api/` responde 502 e o log do backend mostra `Backend started successfully on port 80` | Serviço do tipo **App** no Easypanel injeta `PORT=80`; o backend usa `process.env.PORT` e o nginx interno procura na 3000 | Adicionar `PORT=3000` no Environment do app e fazer deploy |
 | Aviso "Memory overcommit" no Redis | Configuração do host | Na VPS: `echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf && sysctl vm.overcommit_memory=1` |
 
 ## Backup
