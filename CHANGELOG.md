@@ -10,6 +10,12 @@ Fork do [Postiz](https://github.com/gitroomhq/postiz-app) (AGPL-3.0).
 ### Adicionado
 
 - **Storage em AWS S3, MinIO, Backblaze B2 e outros serviços compatíveis com S3.** Até aqui o storage externo só funcionava com o Cloudflare R2: o endereço do serviço estava fixo no código, então credenciais da AWS levavam a uploads com falha. Com `STORAGE_PROVIDER=cloudflare`, a nova variável opcional `STORAGE_S3_ENDPOINT` aponta para qualquer serviço compatível com S3. `STORAGE_S3_FORCE_PATH_STYLE=true` atende o MinIO, e `STORAGE_S3_ACL=none` deixa de enviar o `public-read`, que buckets novos da AWS recusam. O upload em partes feito pelo navegador passa a respeitar o mesmo endereço e a região de `CLOUDFLARE_REGION`, que antes era fixa em `auto`. Sem as novas variáveis, nada muda para quem usa R2. Valores inválidos falham com mensagem clara, exibida na aba **Status → Saúde da infra**. Guia de configuração (bucket policy, permissões IAM e CORS) em `docs/operations/storage-s3.md`.
+- **Instalação pelo Easypanel.** Novo `docker-compose.easypanel.yaml` para subir o Robô MultiPost como serviço Compose no Easypanel: sem portas expostas nem nomes fixos de container (o domínio e o HTTPS ficam com o Easypanel), segredos e domínio pela aba Environment, volumes nomeados para todos os bancos e Temporal usando a configuração embutida na imagem. Corrige também o volume do Elasticsearch, que no compose padrão apontava para um caminho que não guardava os dados. Guia passo a passo e problemas comuns em `docs/operations/easypanel.md`.
+- **Plano de instalação descentralizada no Easypanel.** Postgres nativo com pgvector compartilhado entre app e Temporal, Redis nativo, Temporal sem Elasticsearch e o app buildado pelo próprio Easypanel a partir do GitHub, com Auto Deploy a cada push em `main`. Passo a passo, riscos (build na VPS exige swap; `prisma db push --accept-data-loss` em todo start) e migração em `docs/planning/easypanel-descentralizado.md`.
+
+### Alterado
+
+- **PRs passam a ser abertos no repositório `impulsionantedigital/robo-multipost`.** A regra do `CLAUDE.md` e o hook `gh-pr-fork-guard.sh` agora exigem `--repo impulsionantedigital/robo-multipost`.
 
 ## [0.5.6] - 2026-09-09
 

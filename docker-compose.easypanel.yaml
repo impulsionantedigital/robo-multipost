@@ -1,0 +1,159 @@
+# Robô MultiPost — compose para Easypanel (serviço do tipo "Compose")
+#
+# Diferenças em relação ao docker-compose.yaml:
+# - sem container_name e sem ports: o Easypanel cuida do domínio/HTTPS (aponte o domínio para o serviço "postiz", porta 5000)
+# - segredos e domínio vêm da aba "Environment" do Easypanel (variáveis ${...})
+# - Temporal usa o dynamicconfig embutido na imagem (não precisa da pasta ./dynamicconfig)
+# - volumes nomeados para todos os bancos (dados persistem entre deploys)
+# - mídias em bucket S3-compatível (sem volume /uploads nem /config no app);
+#   requer versão com suporte a STORAGE_S3_ENDPOINT (docs/operations/storage-s3.md)
+# - removidos spotlight e temporal-admin-tools (só debug)
+
+services:
+  postiz:
+    image: ghcr.io/maiconramos/robo-multipost:${APP_VERSION:-0.5.6}
+    restart: always
+    environment:
+      MAIN_URL: 'https://${DOMAIN}'
+      FRONTEND_URL: 'https://${DOMAIN}'
+      NEXT_PUBLIC_BACKEND_URL: 'https://${DOMAIN}/api'
+      BACKEND_INTERNAL_URL: 'http://localhost:3000'
+      JWT_SECRET: '${JWT_SECRET}'
+      ENCRYPTION_KEY: '${ENCRYPTION_KEY}'
+      DATABASE_URL: 'postgresql://postiz:${POSTGRES_PASSWORD}@postiz-postgres:5432/postiz'
+      REDIS_URL: 'redis://postiz-redis:6379'
+      TEMPORAL_ADDRESS: 'temporal:7233'
+      IS_GENERAL: 'true'
+      DISABLE_REGISTRATION: '${DISABLE_REGISTRATION:-false}'
+
+      # Storage S3-compatível (AWS S3, R2, MinIO). Sem STORAGE_S3_ENDPOINT = R2.
+      STORAGE_PROVIDER: 'cloudflare'
+      STORAGE_S3_ENDPOINT: '${STORAGE_S3_ENDPOINT:-}'
+      STORAGE_S3_FORCE_PATH_STYLE: '${STORAGE_S3_FORCE_PATH_STYLE:-false}'
+      STORAGE_S3_ACL: '${STORAGE_S3_ACL:-none}'
+      CLOUDFLARE_ACCOUNT_ID: '${CLOUDFLARE_ACCOUNT_ID:-}'
+      CLOUDFLARE_ACCESS_KEY: '${CLOUDFLARE_ACCESS_KEY}'
+      CLOUDFLARE_SECRET_ACCESS_KEY: '${CLOUDFLARE_SECRET_ACCESS_KEY}'
+      CLOUDFLARE_BUCKETNAME: '${CLOUDFLARE_BUCKETNAME}'
+      CLOUDFLARE_BUCKET_URL: '${CLOUDFLARE_BUCKET_URL}'
+      CLOUDFLARE_REGION: '${CLOUDFLARE_REGION:-auto}'
+
+      DISABLE_BILLING: 'true'
+      DISABLE_MARKETPLACE: 'true'
+      AI_CREDITS_MODE: 'unlimited'
+      ENABLE_KNOWLEDGE_BASE: 'true'
+      API_LIMIT: '${API_LIMIT:-30}'
+      NX_ADD_PLUGINS: 'false'
+
+      # Opcionais (deixe vazio se não usar; credenciais das redes também podem
+      # ser cadastradas pela interface, em Configurações > Credenciais)
+      OPENAI_API_KEY: '${OPENAI_API_KEY:-}'
+      RESEND_API_KEY: '${RESEND_API_KEY:-}'
+      EMAIL_FROM_ADDRESS: '${EMAIL_FROM_ADDRESS:-}'
+      EMAIL_FROM_NAME: '${EMAIL_FROM_NAME:-}'
+      FACEBOOK_APP_ID: '${FACEBOOK_APP_ID:-}'
+      FACEBOOK_APP_SECRET: '${FACEBOOK_APP_SECRET:-}'
+      INSTAGRAM_APP_ID: '${INSTAGRAM_APP_ID:-}'
+      INSTAGRAM_APP_SECRET: '${INSTAGRAM_APP_SECRET:-}'
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+      postiz-redis:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+
+  postiz-postgres:
+    image: pgvector/pgvector:pg17
+    restart: always
+    environment:
+      POSTGRES_USER: postiz
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      POSTGRES_DB: postiz
+    volumes:
+      - postiz-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U postiz -d postiz
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 60s
+
+  postiz-redis:
+    image: redis:7.2
+    restart: always
+    volumes:
+      - postiz-redis-data:/data
+    healthcheck:
+      test: redis-cli ping
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # -----------------------
+  # Temporal (motor dos agendamentos)
+  # -----------------------
+  temporal-elasticsearch:
+    image: elasticsearch:7.17.27
+    restart: always
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    volumes:
+      - temporal-es-data:/usr/share/elasticsearch/data
+
+  temporal-postgresql:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: '${TEMPORAL_DB_PASSWORD}'
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U temporal
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 60s
+
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    restart: always
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+      temporal-elasticsearch:
+        condition: service_started
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=${TEMPORAL_DB_PASSWORD}
+      - POSTGRES_SEEDS=temporal-postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/docker.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=temporal-elasticsearch
+      - ES_VERSION=v7
+      - TEMPORAL_NAMESPACE=default
+
+  # Painel do Temporal (opcional). Para acessar, crie um domínio no Easypanel
+  # apontando para este serviço, porta 8080 — de preferência com Basic Auth.
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    restart: always
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+
+volumes:
+  postiz-postgres-data:
+  postiz-redis-data:
+  temporal-es-data:
+  temporal-postgres-data:
