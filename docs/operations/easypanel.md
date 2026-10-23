@@ -58,6 +58,7 @@ Altere `APP_VERSION` e faça deploy. Os dados ficam nos volumes.
 | `dependency temporal-postgresql failed to start ... unhealthy` | `TEMPORAL_DB_PASSWORD` vazia/errada, ou primeira inicialização lenta | Confira a variável; se o banco foi criado com senha errada, apague o volume `temporal-postgres-data` (vazio na primeira instalação) e faça deploy |
 | "Service is not reachable" | Domínio adicionado depois do deploy | Faça deploy de novo |
 | Erro em `reconcileRefreshTokensCron` no log do app | App subiu antes do Temporal aceitar conexões | Reinicie o container `postiz` |
+| `/api/` responde 502 e o log do backend mostra `cannot have more than 3 search attribute of type Text` | Temporal rodando **sem Elasticsearch** (`ENABLE_ES=false`, ex.: [instalação descentralizada](../planning/easypanel-descentralizado.md)): a imagem `auto-setup` cria atributos de teste do tipo Text e a visibility SQL aceita só 3 | No Temporal: `SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true` e remover `CustomStringField`/`CustomTextField` com `temporal operator search-attribute remove --address <projeto>_temporal:7233 --namespace default --name <campo> --yes`; depois `pm2 restart backend` no app |
 | Aviso "Memory overcommit" no Redis | Configuração do host | Na VPS: `echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf && sysctl vm.overcommit_memory=1` |
 
 ## Backup
