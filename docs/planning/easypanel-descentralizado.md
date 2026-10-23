@@ -130,9 +130,14 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
   TEMPORAL_ADDRESS=multipost_temporal:7233
   IS_GENERAL=true
   DISABLE_REGISTRATION=false
-  STORAGE_PROVIDER=local
-  UPLOAD_DIRECTORY=/uploads
-  NEXT_PUBLIC_UPLOAD_DIRECTORY=/uploads
+  STORAGE_PROVIDER=cloudflare
+  STORAGE_S3_ENDPOINT=https://s3.sa-east-1.amazonaws.com
+  STORAGE_S3_ACL=none
+  CLOUDFLARE_REGION=sa-east-1
+  CLOUDFLARE_ACCESS_KEY=
+  CLOUDFLARE_SECRET_ACCESS_KEY=
+  CLOUDFLARE_BUCKETNAME=
+  CLOUDFLARE_BUCKET_URL=https://<bucket>.s3.sa-east-1.amazonaws.com
   DISABLE_BILLING=true
   DISABLE_MARKETPLACE=true
   AI_CREDITS_MODE=unlimited
@@ -141,7 +146,7 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
   NX_ADD_PLUGINS=false
   ```
 
-- [ ] **Mounts:** volume `uploads` → `/uploads`; volume `config` → `/config`.
+- [ ] **Mounts:** nenhum. As mídias ficam no bucket S3 (bucket policy de leitura pública + CORS liberando `PUT` do domínio — ver `docs/operations/storage-s3.md`). O app não usa `/config`. **Pré-requisito:** a `main` precisa conter o suporte a `STORAGE_S3_ENDPOINT` (branch `feat/s3-compatible-storage`); sem ele, os uploads falham.
 - [ ] **Domains:** `post.impulsionante.com.br`, HTTPS, porta **5000**. (Antes, remover o domínio do serviço Compose antigo.)
 - [ ] **Deploy** (primeiro build: ~15–30 min). Acompanhar o log do build; se parar com `Killed` ou `JavaScript heap out of memory`, falta memória → conferir swap.
 - [ ] No log do app, procurar `Backend is running` e ausência de erro em `reconcileRefreshTokensCron`.
@@ -166,7 +171,7 @@ docker cp postiz.dump $(docker ps -qf name=multipost_postgres):/tmp/
 docker exec $(docker ps -qf name=multipost_postgres) pg_restore -U postgres -d postiz --no-owner /tmp/postiz.dump
 ```
 
-Uploads: copiar o conteúdo do volume `services_multi-post_postiz-uploads` para o novo volume `uploads`. Usar o **mesmo `ENCRYPTION_KEY`**. Dados do Temporal (workflows em andamento) não migram — o app recria os workflows recorrentes no boot.
+Uploads: copiar o conteúdo do volume `services_multi-post_postiz-uploads` para o bucket S3 mantendo os nomes (ex.: `aws s3 sync <pasta-do-volume> s3://<bucket>/`) e trocar, no banco, o prefixo antigo (`https://<domínio>/uploads`) pelo `CLOUDFLARE_BUCKET_URL` nas colunas `Media.path`, `Media.thumbnail`, `Post.image`, `Integration.picture` e `Profile.avatarUrl`. Fazer isso **antes** de desligar o serviço antigo. Usar o **mesmo `ENCRYPTION_KEY`**. Dados do Temporal (workflows em andamento) não migram — o app recria os workflows recorrentes no boot.
 
 ## Recursos estimados
 
@@ -186,7 +191,6 @@ Uploads: copiar o conteúdo do volume `services_multi-post_postiz-uploads` para 
 - **Build mais rápido:** reorganizar o `Dockerfile.dev` para copiar `pnpm-lock.yaml` + `pnpm-workspace.yaml` e rodar `pnpm fetch` antes do `COPY . .`, aproveitando o cache de camadas do Docker na VPS. Atenção: `Dockerfile.dev` vem do upstream — conflito em `sync-upstream`.
 - **Migrar o build para o GitHub Actions** (imagem pronta no GHCR + Deploy Webhook) se a VPS sofrer nos builds.
 - **Healthcheck** no serviço `postiz` para o Easypanel detectar travamento.
-- **Storage externo (R2)** para uploads, permitindo mover o app sem copiar volume.
 
 ## Decisões pendentes (para você)
 
