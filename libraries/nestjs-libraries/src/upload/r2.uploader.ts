@@ -12,6 +12,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import path from 'path';
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
+import { resolveS3CompatOptions } from './s3.client.config';
 
 const {
   CLOUDFLARE_ACCOUNT_ID,
@@ -21,13 +22,25 @@ const {
   CLOUDFLARE_BUCKET_URL,
 } = process.env;
 
+// Com storage local este modulo e importado mas nunca usado: nesse caso nao
+// le as variaveis STORAGE_S3_*, para uma env S3 invalida nao derrubar o boot.
+const s3Options = resolveS3CompatOptions(
+  process.env.STORAGE_PROVIDER === 'cloudflare'
+    ? process.env
+    : { CLOUDFLARE_ACCOUNT_ID }
+);
+
 const R2 = new S3Client({
-  region: 'auto',
-  endpoint: `https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  region: s3Options.region,
+  endpoint: s3Options.endpoint,
+  forcePathStyle: s3Options.forcePathStyle,
   credentials: {
     accessKeyId: CLOUDFLARE_ACCESS_KEY!,
     secretAccessKey: CLOUDFLARE_SECRET_ACCESS_KEY!,
   },
+  // Sem isso o SDK poe parametros de checksum nas URLs pre-assinadas do
+  // multipart, que o navegador nao envia e MinIO/S3-compativeis recusam.
+  requestChecksumCalculation: 'WHEN_REQUIRED',
 });
 
 // Function to generate a random string
