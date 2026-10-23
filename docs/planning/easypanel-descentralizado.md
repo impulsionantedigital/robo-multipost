@@ -6,65 +6,57 @@
 
 Cada peça vira um serviço independente no Easypanel:
 
-| Serviço Easypanel | Tipo | Imagem | Domínio |
+| Serviço Easypanel | Tipo | Fonte | Domínio |
 |---|---|---|---|
-| `postgres` | **Postgres nativo** | `pgvector/pgvector:pg17` | — |
+| `postgres` | **Postgres nativo** | imagem `pgvector/pgvector:pg17` | — |
 | `redis` | **Redis nativo** | padrão do Easypanel | — |
 | `temporal` | App (Docker image) | `temporalio/auto-setup:1.28.1` | — |
 | `temporal-ui` | App (Docker image) | `temporalio/ui:2.34.0` | opcional, com Basic Auth |
-| `postiz` | App (Docker image) | `ghcr.io/impulsionantedigital/robo-multipost:main` | `post.impulsionante.com.br` |
+| `postiz` | App (**GitHub**) | `impulsionantedigital/robo-multipost`, branch `main`, `Dockerfile.dev` | `post.impulsionante.com.br` |
 
 Um único Postgres guarda **três bancos**: `postiz` (app), `temporal` e `temporal_visibility` (Temporal). O Elasticsearch sai: o Temporal passa a usar o próprio Postgres para buscas (visibility SQL).
+
+O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código do GitHub. Com "Auto Deploy" ligado, cada push em `main` dispara build + deploy.
 
 ## Por que isso funciona (verificado no código)
 
 - **pgvector:** a base de conhecimento usa `PgVector` do Mastra (`libraries/nestjs-libraries/src/chat/mastra.store.ts`), que precisa da extensão `vector`. A imagem `pgvector/pgvector:pg17` é o Postgres oficial + a extensão; o Postgres nativo do Easypanel aceita trocar a imagem ([docs](https://easypanel.io/docs/services/postgres)).
 - **Temporal sem Elasticsearch:** o app registra só 2 search attributes do tipo Keyword (`organizationId`, `postId` — `temporal/temporal.register.ts`) e consulta `postId="..." AND ExecutionStatus="Running"` (`posts.service.ts`). Visibility SQL no Postgres 12+ suporta isso. Economiza ~0,5–1 GB de RAM.
-- **Temporal no mesmo Postgres:** a imagem `auto-setup` cria sozinha os bancos `temporal` e `temporal_visibility` e aplica o schema. O usuário padrão do Postgres do Easypanel é superusuário, então tem permissão.
-- **Imagem genérica:** as variáveis do app (`MAIN_URL`, `NEXT_PUBLIC_BACKEND_URL` etc.) são lidas em tempo de execução — a mesma imagem serve para qualquer domínio, sem rebuild para mudar configuração.
+- **Temporal no mesmo Postgres:** a imagem `auto-setup` cria sozinha os bancos `temporal` e `temporal_visibility` e aplica o schema. O usuário padrão do Postgres do Easypanel é superusuário, então tem permissão. `DB=postgres12` é o nome do driver (Postgres 12 ou mais novo), não a versão do servidor.
+- **Configuração em runtime:** as variáveis do app (`MAIN_URL`, `NEXT_PUBLIC_BACKEND_URL` etc.) são lidas na execução — mudar variável não exige rebuild, só restart.
 
-## "Atualizar automaticamente sem buildar um monte de imagem"
+## Build na VPS — o que esperar
 
-O código é TypeScript + Next.js: **algum build sempre precisa acontecer** (`pnpm run build` compila frontend, backend e orchestrator). A escolha é **onde** ele roda.
-
-### Opção A — Build no GitHub Actions, deploy no Easypanel (recomendada)
-
-```
-push em main → GitHub Actions builda 1 imagem (amd64) → GHCR → webhook → Easypanel baixa e reinicia
-```
-
-- Workflow pronto: [`.github/workflows/deploy-easypanel.yml`](../../.github/workflows/deploy-easypanel.yml).
-- Só **uma** arquitetura (amd64), contra as duas (amd64 + arm64) + manifest do workflow de release. Sem tags, sem release: todo push em `main` deploya.
-- O repo é **público** → GitHub Actions e GHCR são gratuitos e sem limite de minutos.
-- A VPS só baixa a imagem pronta: zero risco de o build derrubar Postgres/Temporal por falta de RAM.
-- Login no GHCR usa o `GITHUB_TOKEN` automático — **não precisa** criar token pessoal.
-- Tempo estimado: 15–25 min por push (o `Dockerfile.dev` copia o repo inteiro antes do `pnpm install`, então o cache ajuda pouco — ver "Melhorias futuras").
-
-### Opção B — Easypanel builda direto do GitHub
-
-App service com fonte GitHub, Dockerfile `Dockerfile.dev`, "Auto Deploy" ligado.
-
-- Mais simples de configurar (sem Actions).
-- **Mas** o build roda na VPS: `NODE_OPTIONS=--max-old-space-size=4096` + Next.js → precisa de ~4–6 GB livres por 15–30 min, competindo com Postgres e Temporal. Em VPS de 4–8 GB, risco real de OOM derrubando o banco.
-- Só vale com VPS de 16 GB+ ou servidor de build separado.
-
-**Recomendação: Opção A.**
+- `Dockerfile.dev` roda `pnpm install` + `pnpm run build` com `NODE_OPTIONS=--max-old-space-size=4096` (frontend Next.js + backend + orchestrator).
+- **Pico de RAM do build: ~4–6 GB**, somado ao que já está rodando (~2 GB). **Tempo: ~15–30 min** por push, com CPU alta (o app fica mais lento durante o build).
+- O `Dockerfile.dev` copia o repo inteiro antes do `pnpm install`, então quase todo push refaz a instalação de dependências.
+- Enquanto o build roda, a versão anterior continua no ar; a troca só acontece no fim (downtime ~1–2 min: `prisma db push` + pm2 subindo 3 processos).
+- **Swap é obrigatório** para não correr risco de o kernel matar o Postgres/Temporal por falta de memória (passo 0).
 
 ## ⚠️ Riscos que você precisa saber antes de ligar o deploy automático
 
-1. **`prisma db push --accept-data-loss` roda em todo start** (CMD do `Dockerfile.dev` e script `pm2-run`). Se um commit em `main` remover/renomear um campo do `schema.prisma`, os dados daquela coluna são **apagados automaticamente** no próximo deploy. Com deploy automático, `main` vira produção: revise mudanças de schema antes do merge e mantenha backup diário do Postgres.
-2. **Ordem de subida:** se o `postiz` subir antes do `temporal` aceitar conexões, a rotina `reconcileRefreshTokensCron` falha (só loga) e fica parada até o próximo restart. Em deploys normais o Temporal já está no ar; após reiniciar a VPS inteira, reinicie o `postiz` por último.
-3. **Downtime por deploy:** ~1–2 min (pull + `prisma db push` + pm2 subindo 3 processos).
-4. **Branching do projeto:** o `CLAUDE.md` define `main` = desenvolvimento e `release` = produção. Com um único ambiente, o plano usa `main`. Se um dia quiser homologação, troque o gatilho do workflow para `release`.
-5. **Workflows herdados:** `build-containers.yml` e `promote-release.yml` publicam em `ghcr.io/maiconramos/...` e vão **falhar** se alguém criar tag `v*` no seu repo. Não atrapalham o deploy; ajustar ou desativar depois.
+1. **`prisma db push --accept-data-loss` roda em todo start** (CMD do `Dockerfile.dev` e script `pm2-run`). O projeto não usa migrations versionadas. Se um commit em `main` remover/renomear um campo do `schema.prisma`, os dados daquela coluna são **apagados automaticamente** no próximo deploy. Com deploy automático, `main` vira produção: revise mudanças de schema antes do merge e mantenha backup diário do Postgres. (Melhoria proposta: remover `--accept-data-loss` — ver "Melhorias futuras".)
+2. **OOM durante o build:** sem swap, um build pode derrubar o banco. Com swap, o pior caso é o build ficar lento.
+3. **Ordem de subida:** se o `postiz` subir antes do `temporal` aceitar conexões, a rotina `reconcileRefreshTokensCron` falha (só loga) e fica parada até o próximo restart. Após reiniciar a VPS inteira, reinicie o `postiz` por último.
+4. **Branching do projeto:** o `CLAUDE.md` define `main` = desenvolvimento e `release` = produção. Com um único ambiente, o plano usa `main`. Para ter homologação depois, aponte o serviço para `release`.
+5. **Workflows herdados:** `build-containers.yml` e `promote-release.yml` publicam em `ghcr.io/maiconramos/...` e vão **falhar** se alguém criar tag `v*` no seu repo. Não afetam o Easypanel; ajustar ou desativar depois.
 
 ## Passo a passo (executar na ordem)
 
 ### 0. Preparação
 
+- [ ] **Swap na VPS** (terminal SSH; 8 GB é uma boa margem):
+
+  ```bash
+  fallocate -l 8G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  echo 'vm.swappiness=10' >> /etc/sysctl.conf && sysctl vm.swappiness=10
+  free -h   # conferir a linha "Swap"
+  ```
+
 - [ ] Gerar segredos (no Mac): `openssl rand -base64 32` (×2: `JWT_SECRET`, `ENCRYPTION_KEY`) e `openssl rand -hex 24` (senhas). **Pode reaproveitar** `JWT_SECRET` e `ENCRYPTION_KEY` da instalação atual.
 - [ ] Decidir: instalação limpa (recomendado — a atual só tem a conta admin) ou migrar dados (ver "Migração").
-- [ ] Projeto no Easypanel: pode ser o mesmo (`services`) ou um novo, ex. `multipost`. Os hostnames internos ficam `<projeto>_<serviço>` — abaixo uso `multipost_`.
+- [ ] Projeto no Easypanel: os hostnames internos ficam `<projeto>_<serviço>` (ex.: projeto `multipost` + serviço `postgres` = `multipost_postgres`). O valor exato aparece como "Internal Host" na tela de cada serviço.
 
 ### 1. Postgres nativo
 
@@ -106,15 +98,16 @@ App service com fonte GitHub, Dockerfile `Dockerfile.dev`, "Auto Deploy" ligado.
 - [ ] **+ Service → App**, `temporal-ui`, imagem `temporalio/ui:2.34.0`, env `TEMPORAL_ADDRESS=multipost_temporal:7233`.
 - [ ] Domínio (ex. `temporal.impulsionante.com.br`, porta 8080) **com Basic Auth ligado** — o painel não tem login próprio e mostra dados dos posts.
 
-### 5. Primeiro build da imagem (GitHub)
+### 5. Conectar o GitHub ao Easypanel
 
-- [ ] Fazer merge desta branch em `main` (ou rodar o workflow "Deploy Easypanel" manualmente em Actions → Run workflow).
-- [ ] Esperar o workflow terminar. Ele vai avisar que o webhook não está configurado — esperado nesta etapa.
-- [ ] GitHub → perfil da org → **Packages → robo-multipost → Package settings → Change visibility → Public**. (Sem isso, o Easypanel não consegue baixar sem credenciais.)
+- [ ] GitHub → **Settings → Developer settings → Personal access tokens → Fine-grained token**: acesso só ao repo `impulsionantedigital/robo-multipost`, permissões **Contents: Read** e **Webhooks: Read and write** (o Easypanel cria o webhook do Auto Deploy).
+- [ ] Easypanel → **Settings → GitHub**: colar o token.
 
-### 6. App `postiz`
+### 6. App `postiz` (build do GitHub)
 
-- [ ] **+ Service → App**, `postiz`, fonte **Docker Image** `ghcr.io/impulsionantedigital/robo-multipost:main`.
+- [ ] **+ Service → App**, nome `postiz`.
+- [ ] **Source → GitHub**: owner `impulsionantedigital`, repo `robo-multipost`, branch `main`, build path `/`.
+- [ ] **Build → Dockerfile**, arquivo `Dockerfile.dev`.
 - [ ] Environment:
 
   ```
@@ -142,14 +135,13 @@ App service com fonte GitHub, Dockerfile `Dockerfile.dev`, "Auto Deploy" ligado.
 
 - [ ] **Mounts:** volume `uploads` → `/uploads`; volume `config` → `/config`.
 - [ ] **Domains:** `post.impulsionante.com.br`, HTTPS, porta **5000**. (Antes, remover o domínio do serviço Compose antigo.)
-- [ ] Deploy. No log, procurar `Backend is running` e ausência de erro em `reconcileRefreshTokensCron`.
+- [ ] **Deploy** (primeiro build: ~15–30 min). Acompanhar o log do build; se parar com `Killed` ou `JavaScript heap out of memory`, falta memória → conferir swap.
+- [ ] No log do app, procurar `Backend is running` e ausência de erro em `reconcileRefreshTokensCron`.
 
-### 7. Ligar o deploy automático
+### 7. Ligar o Auto Deploy
 
-- [ ] No serviço `postiz` → **Deployments → Deploy Webhook**: copiar a URL.
-- [ ] GitHub → repo → **Settings → Secrets and variables → Actions → New secret**: `EASYPANEL_DEPLOY_WEBHOOK` = a URL.
-- [ ] Teste: commit trivial em `main` → acompanhar Actions → ver o Easypanel reimplantar → conferir no rodapé/versão que é o `sha` novo.
-- [ ] **Validar que o Easypanel baixa a imagem nova com a mesma tag `:main`.** Se reimplantar a versão antiga, trocar a fonte para usar a tag `sha-<commit>` e atualizar via API do Easypanel (plano B, a pesquisar).
+- [ ] Serviço `postiz` → **Source → Auto Deploy: on**. O Easypanel cria o webhook no repo.
+- [ ] Teste: commit trivial em `main` → ver o build começar sozinho no Easypanel → app atualizado no fim.
 
 ### 8. Desligar a stack antiga
 
@@ -176,14 +168,16 @@ Uploads: copiar o conteúdo do volume `services_multi-post_postiz-uploads` para 
 | temporal | 300–500 MB |
 | temporal-ui | 30 MB |
 | postiz (3 processos Node + nginx) | 1–1,5 GB |
-| **Total** | **~2–2,5 GB** (vs ~3–3,5 GB com Elasticsearch e 2 Postgres) |
+| **Total em operação** | **~2–2,5 GB** |
+| **Pico durante build** | **+4–6 GB** (RAM + swap) |
 
 ## Melhorias futuras
 
-- **Build mais rápido:** reorganizar o `Dockerfile.dev` para copiar `pnpm-lock.yaml` + `pnpm-workspace.yaml` e rodar `pnpm fetch` antes do `COPY . .`. Assim o cache do GitHub reaproveita as dependências e o build cai para ~8–12 min quando só código muda. Atenção: `Dockerfile.dev` vem do upstream — conflito em `sync-upstream`.
-- **Ajustar `build-containers.yml` / `promote-release.yml`** para `ghcr.io/${{ github.repository_owner }}` se quiser releases versionadas.
-- **Healthcheck** no serviço `postiz` (`/api/health` ou similar) para o Easypanel detectar travamento.
-- **Storage externo (R2)** para uploads, permitindo escalar ou mover o app sem copiar volume.
+- **Remover `--accept-data-loss`** do script `prisma-db-push`: mudanças aditivas continuam automáticas e mudanças destrutivas passam a falhar em vez de apagar dados.
+- **Build mais rápido:** reorganizar o `Dockerfile.dev` para copiar `pnpm-lock.yaml` + `pnpm-workspace.yaml` e rodar `pnpm fetch` antes do `COPY . .`, aproveitando o cache de camadas do Docker na VPS. Atenção: `Dockerfile.dev` vem do upstream — conflito em `sync-upstream`.
+- **Migrar o build para o GitHub Actions** (imagem pronta no GHCR + Deploy Webhook) se a VPS sofrer nos builds.
+- **Healthcheck** no serviço `postiz` para o Easypanel detectar travamento.
+- **Storage externo (R2)** para uploads, permitindo mover o app sem copiar volume.
 
 ## Decisões pendentes (para você)
 
