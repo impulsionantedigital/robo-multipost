@@ -21,7 +21,7 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
 ## Por que isso funciona (verificado no código)
 
 - **pgvector:** a base de conhecimento usa `PgVector` do Mastra (`libraries/nestjs-libraries/src/chat/mastra.store.ts`), que precisa da extensão `vector`. A imagem `pgvector/pgvector:pg17` é o Postgres oficial + a extensão; o Postgres nativo do Easypanel aceita trocar a imagem ([docs](https://easypanel.io/docs/services/postgres)).
-- **Temporal sem Elasticsearch:** o app registra só 2 search attributes do tipo Keyword (`organizationId`, `postId` — `temporal/temporal.register.ts`) e consulta `postId="..." AND ExecutionStatus="Running"` (`posts.service.ts`). Visibility SQL no Postgres 12+ suporta isso. Economiza ~0,5–1 GB de RAM.
+- **Temporal sem Elasticsearch:** o app registra 2 search attributes do tipo **Text** (`organizationId`, `postId` — `temporal/temporal.register.ts`, valor `1` = `INDEXED_VALUE_TYPE_TEXT`) e consulta `postId="..." AND ExecutionStatus="Running"` (`posts.service.ts`). Visibility SQL no Postgres 12+ suporta isso, **mas aceita no máximo 3 atributos Text por namespace**. A imagem `auto-setup` cria por padrão atributos de teste, dois deles Text (`CustomStringField`, `CustomTextField`) — sem `SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true` o backend trava no boot com `cannot have more than 3 search attribute of type Text`. Economiza ~0,5–1 GB de RAM.
 - **Temporal no mesmo Postgres:** a imagem `auto-setup` cria sozinha os bancos `temporal` e `temporal_visibility` e aplica o schema. O usuário padrão do Postgres do Easypanel é superusuário, então tem permissão. `DB=postgres12` é o nome do driver (Postgres 12 ou mais novo), não a versão do servidor.
 - **Configuração em runtime:** as variáveis do app (`MAIN_URL`, `NEXT_PUBLIC_BACKEND_URL` etc.) são lidas na execução — mudar variável não exige rebuild, só restart.
 
@@ -88,6 +88,14 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
   ENABLE_ES=false
   DEFAULT_NAMESPACE=default
   DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/docker.yaml
+  SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true
+  ```
+
+  `SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true` é **obrigatório** sem Elasticsearch (ver "Por que isso funciona"). Se o Temporal já subiu sem ela, remova os atributos de teste:
+
+  ```bash
+  temporal operator search-attribute remove --address <projeto>_temporal:7233 --namespace default --name CustomStringField --yes
+  temporal operator search-attribute remove --address <projeto>_temporal:7233 --namespace default --name CustomTextField --yes
   ```
 
 - [ ] **Sem domínio** (porta 7233 só na rede interna).
@@ -137,6 +145,7 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
 - [ ] **Domains:** `post.impulsionante.com.br`, HTTPS, porta **5000**. (Antes, remover o domínio do serviço Compose antigo.)
 - [ ] **Deploy** (primeiro build: ~15–30 min). Acompanhar o log do build; se parar com `Killed` ou `JavaScript heap out of memory`, falta memória → conferir swap.
 - [ ] No log do app, procurar `Backend is running` e ausência de erro em `reconcileRefreshTokensCron`.
+- [ ] Se `/api/` responder 502 e o backend não logar `Backend is running`: rode no console do app `pm2 logs backend --lines 60 --nostream | grep -v RouterExplorer | tail -40`. Erros comuns: host errado em `TEMPORAL_ADDRESS`/`REDIS_URL` (os hosts usam o nome do **projeto**: `<projeto>_temporal`), Redis sem senha na URL, ou o limite de atributos Text do Temporal. Depois de corrigir, `pm2 restart backend` — processo travado não reinicia sozinho.
 
 ### 7. Ligar o Auto Deploy
 
