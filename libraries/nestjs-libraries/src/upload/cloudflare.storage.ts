@@ -10,6 +10,7 @@ import mime from 'mime-types';
 import { IUploadProvider } from './upload.interface';
 import axios from 'axios';
 import { loadFromUrlOrDataUrl } from './storage.helpers';
+import { r2Endpoint, S3CompatOptions } from './s3.client.config';
 
 class CloudflareStorage implements IUploadProvider {
   private _client: S3Client;
@@ -20,11 +21,18 @@ class CloudflareStorage implements IUploadProvider {
     secretKey: string,
     private region: string,
     private _bucketName: string,
-    private _uploadUrl: string
+    private _uploadUrl: string,
+    private _s3Options: S3CompatOptions = {
+      endpoint: r2Endpoint(accountID),
+      region,
+      forcePathStyle: false,
+      acl: 'public-read',
+    }
   ) {
     this._client = new S3Client({
-      endpoint: `https://${accountID}.r2.cloudflarestorage.com`,
-      region,
+      endpoint: _s3Options.endpoint,
+      region: _s3Options.region,
+      forcePathStyle: _s3Options.forcePathStyle,
       credentials: {
         accessKeyId: accessKey,
         secretAccessKey: secretKey,
@@ -62,7 +70,7 @@ class CloudflareStorage implements IUploadProvider {
   }
 
   async healthCheck(): Promise<void> {
-    // HeadBucket valida credencial R2 + acesso ao bucket SEM escrever nada.
+    // HeadBucket valida credencial + acesso ao bucket SEM escrever nada.
     await this._client.send(
       new HeadBucketCommand({ Bucket: this._bucketName })
     );
@@ -93,10 +101,11 @@ class CloudflareStorage implements IUploadProvider {
       const id = makeId(10);
       const extension = mime.extension(file.mimetype) || '';
 
-      // Create the PutObjectCommand to upload the file to Cloudflare R2
+      // Sem ACL quando STORAGE_S3_ACL=none: buckets AWS com ACL desativada
+      // recusam qualquer upload que envie ACL.
       const command = new PutObjectCommand({
         Bucket: this._bucketName,
-        ACL: 'public-read',
+        ...(this._s3Options.acl ? { ACL: this._s3Options.acl } : {}),
         Key: `${id}.${extension}`,
         Body: file.buffer,
       });
@@ -116,7 +125,7 @@ class CloudflareStorage implements IUploadProvider {
         stream: file.buffer as any,
       };
     } catch (err) {
-      console.error('Error uploading file to Cloudflare R2:', err);
+      console.error('Error uploading file to S3-compatible storage:', err);
       throw err;
     }
   }

@@ -39,6 +39,10 @@ services:
       # CLOUDFLARE_BUCKETNAME: 'your-bucket-name'
       # CLOUDFLARE_BUCKET_URL: 'https://your-bucket-url.r2.cloudflarestorage.com/'
       # CLOUDFLARE_REGION: 'auto'
+      # AWS S3 / MinIO / outro S3-compativel (ver docs/operations/storage-s3.md):
+      # STORAGE_S3_ENDPOINT: 'https://s3.sa-east-1.amazonaws.com'
+      # STORAGE_S3_FORCE_PATH_STYLE: 'false'  # 'true' no MinIO
+      # STORAGE_S3_ACL: 'none'                # buckets AWS com ACL desativada
 
       # === Email Settings
       # EMAIL_PROVIDER: 'resend'  # 'resend' (default) ou 'smtp'

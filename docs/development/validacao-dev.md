@@ -398,7 +398,8 @@ docker compose -f docker-compose.dev.yaml up -d  # Sobe infraestrutura dev
 
 | Variavel                     | Descricao                          |
 |------------------------------|-------------------------------------|
-| `STORAGE_PROVIDER`           | `local` ou `cloudflare`            |
+| `STORAGE_PROVIDER`           | `local` ou `cloudflare` (R2/S3)    |
+| `STORAGE_S3_ENDPOINT`        | S3-compatível (`storage-s3.md`)    |
 | `UPLOAD_DIRECTORY`           | Diretorio para uploads locais      |
 | `OPENAI_API_KEY`             | Para funcionalidades de IA          |
 | `X_API_KEY` / `X_API_SECRET` | Twitter/X API                      |
