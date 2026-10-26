@@ -124,6 +124,7 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
   NEXT_PUBLIC_BACKEND_URL=https://post.impulsionante.com.br/api
   BACKEND_INTERNAL_URL=http://localhost:3000
   PORT=3000
+  NODE_ENV=production
   JWT_SECRET=
   ENCRYPTION_KEY=
   DATABASE_URL=postgresql://postgres:<senha>@multipost_postgres:5432/postiz
@@ -146,6 +147,8 @@ O `postiz` é buildado **pelo próprio Easypanel, na VPS**, a partir do código 
   API_LIMIT=30
   NX_ADD_PLUGINS=false
   ```
+
+  `NODE_ENV=production` é **obrigatório**: sem ele o webhook do Instagram aceita eventos sem assinatura quando a conta é desconhecida (`ig-webhook.controller.ts`) e o cache de analytics cai de 1 h para 1 s (`posts.service.ts`, `integration.service.ts`). Com ele, o botão "Teste" do webhook no painel da Meta recebe 403 — esperado, pois o payload de teste usa uma conta fictícia sem App Secret.
 
   `PORT=3000` é **obrigatório**: o Easypanel injeta `PORT=80` em serviços App e o backend usa `process.env.PORT` (`apps/backend/src/main.ts`); sem isso ele escuta na 80, o nginx interno procura na 3000 e `/api/` responde 502.
 
